@@ -1,0 +1,32 @@
+{
+  "name": "langtest",
+  "version": "1.0.0",
+  "description": "LangGraph TypeScript playground",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "build-mvp": "tsx index.ts",
+    "doc-gen": "tsx doc-gen.ts",
+    "playground": "tsx playground/simple-graph.ts",
+    "playground:simple": "tsx playground/simple-graph.ts",
+    "playground:calculator": "tsx playground/calculator-agent.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/core": "^1.1.31",
+    "@langchain/google": "^0.1.5",
+    "@langchain/langgraph": "^1.2.1",
+    "dotenv": "^16.4.5",
+    "ts-morph": "^24.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
