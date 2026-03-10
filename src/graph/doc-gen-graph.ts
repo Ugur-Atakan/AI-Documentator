@@ -4,6 +4,7 @@ import type { EndpointTask, ParsedEndpoint, GeneratedDocs } from "../types/endpo
 import { generateDtos } from "../nodes/dto-generator.js";
 import { generateSwagger } from "../nodes/swagger-generator.js";
 import { writeGeneratedDocs } from "../nodes/file-writer.js";
+import { parsePrismaSchema, getRelevantSchema, type PrismaModelMap } from "../utils/prisma-filter.js";
 
 const DocGenState = Annotation.Root({
   projectRoot: Annotation<string>(),
@@ -32,8 +33,11 @@ function createModels(apiKey: string) {
   return { strongModel, fastModel };
 }
 
-export function buildDocGenGraph(apiKey: string) {
+export function buildDocGenGraph(apiKey: string, fullPrismaSchema: string) {
   const { strongModel, fastModel } = createModels(apiKey);
+  const modelMap: PrismaModelMap = parsePrismaSchema(fullPrismaSchema);
+
+  console.log(`Prisma schema parsed: ${modelMap.size} models/enums indexed`);
 
   async function processEndpointNode(state: DocGenStateType) {
     const idx = state.currentTaskIndex;
@@ -51,10 +55,18 @@ export function buildDocGenGraph(apiKey: string) {
     updatedQueue[idx] = { ...task, status: "in_progress" };
 
     try {
-      // Step 1: Generate DTOs
+      // Step 1: Generate DTOs (with filtered schema)
+      const tracedModels = task.endpoint.tracedService?.prismaModelsReferenced ?? [];
+      const relevantSchema = getRelevantSchema(
+        tracedModels,
+        task.endpoint.routePath,
+        modelMap,
+        fullPrismaSchema
+      );
+
       const { requestDtoCode, responseDtoCode } = await generateDtos(
         task.endpoint,
-        state.prismaSchema,
+        relevantSchema,
         strongModel
       );
 

@@ -78,7 +78,7 @@ async function main() {
 
   // Step 3: Run LangGraph documentation generation
   console.log("Step 3: Generating documentation with LLM (one endpoint at a time)...");
-  const graph = buildDocGenGraph(apiKey!);
+  const graph = buildDocGenGraph(apiKey!, prismaSchema);
 
   const result = await graph.invoke(
     {
