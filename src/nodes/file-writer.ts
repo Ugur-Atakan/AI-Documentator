@@ -136,10 +136,10 @@ export function writeGeneratedDocs(
     const moduleName = extractModuleName(task.endpoint.controllerFilePath);
     const moduleDir = path.join(outputDir, moduleName);
     dtoDir = path.join(moduleDir, "dto");
-    decoratorDir = moduleDir;
+    decoratorDir = path.join(moduleDir, "decorators");
   } else {
     dtoDir = path.join(controllerDir, "dto");
-    decoratorDir = controllerDir;
+    decoratorDir = path.join(controllerDir, "decorators");
   }
 
   const written: string[] = [];
