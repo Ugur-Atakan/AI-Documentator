@@ -5,6 +5,7 @@ import { generateCommand } from "./src/cli/commands/generate.js";
 import { parseCommand } from "./src/cli/commands/parse.js";
 import { initCommand } from "./src/cli/commands/init.js";
 import { runInteractive } from "./src/cli/interactive.js";
+import { printBanner } from "./src/cli/ui.js";
 
 // No args or just "documentator" → interactive mode
 const hasSubcommand = process.argv.length > 2 &&
@@ -22,6 +23,7 @@ if (!hasSubcommand) {
     process.exit(1);
   });
 } else {
+  printBanner();
   const program = new Command();
 
   program

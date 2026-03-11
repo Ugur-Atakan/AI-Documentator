@@ -22,27 +22,30 @@ function capitalize(str: string): string {
 }
 
 /**
+ * Extract the module/feature name from a controller file path.
+ *
+ * Examples:
+ *   /project/src/modules/mailbox/mailbox.controller.ts  → "mailbox"
+ *   /project/src/modules/admin/admin.controller.ts      → "admin"
+ *   /project/src/auth/auth.controller.ts                → "auth"
+ *   /project/src/app.controller.ts                      → "app"
+ */
+function extractModuleName(controllerFilePath: string): string {
+  const dir = path.dirname(controllerFilePath);
+  return path.basename(dir);
+}
+
+/**
  * Compute a POSIX-style relative import path from `fromFile` to `toFile`.
  * Always starts with './' or '../' — never an absolute path.
- *
- * Example:
- *   fromFile: /project/src/dtos/create-user.decorators.ts
- *   toFile:   /project/src/dtos/create-user.response.dto.ts
- *   result:   ./create-user.response.dto
  */
 function relativeImport(fromFile: string, toFile: string): string {
   const fromDir = path.dirname(fromFile);
   let rel = path.relative(fromDir, toFile);
-
-  // Remove .ts extension for import
   rel = rel.replace(/\.ts$/, "");
-
-  // Ensure it starts with ./ or ../
   if (!rel.startsWith(".")) {
     rel = "./" + rel;
   }
-
-  // Normalize to posix separators (for Windows compat)
   return rel.replace(/\\/g, "/");
 }
 
@@ -63,7 +66,6 @@ function buildDecoratorFileContent(
     `import { ApiOperation, ApiResponse, ApiBody, ApiParam, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';`
   );
 
-  // Always use relative imports computed from actual file paths
   if (requestDtoName && requestDtoPath) {
     const importPath = relativeImport(decoratorFilePath, requestDtoPath);
     lines.push(`import { ${requestDtoName} } from '${importPath}';`);
@@ -125,9 +127,20 @@ export function writeGeneratedDocs(
   const methodKebab = kebabCase(task.endpoint.methodName);
   const controllerDir = path.dirname(task.endpoint.controllerFilePath);
 
-  // Where to write files
-  const dtoDir = outputDir ?? path.join(controllerDir, "dto");
-  const decoratorDir = outputDir ?? controllerDir;
+  // When outputDir is set, organize by module: outputDir/{module}/dto/
+  // When not set, write next to the controller: controller-dir/dto/
+  let dtoDir: string;
+  let decoratorDir: string;
+
+  if (outputDir) {
+    const moduleName = extractModuleName(task.endpoint.controllerFilePath);
+    const moduleDir = path.join(outputDir, moduleName);
+    dtoDir = path.join(moduleDir, "dto");
+    decoratorDir = moduleDir;
+  } else {
+    dtoDir = path.join(controllerDir, "dto");
+    decoratorDir = controllerDir;
+  }
 
   const written: string[] = [];
 

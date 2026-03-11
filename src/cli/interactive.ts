@@ -76,8 +76,8 @@ async function interactiveGenerate(): Promise<void> {
   const mode = await select({
     message: "Execution mode:",
     choices: [
-      { name: `${chalk.yellow("◌ Dry-run")}   — preview only, no files written`, value: "dry-run" },
-      { name: `${chalk.green("● Generate")}  — write files to output`, value: "generate" },
+      { name: `Dry-run     ${chalk.dim("preview only, no files written")}`, value: "dry-run" },
+      { name: `Write       ${chalk.dim("generate and write files")}`, value: "generate" },
     ],
   });
 
@@ -85,10 +85,10 @@ async function interactiveGenerate(): Promise<void> {
   const concurrency = await select({
     message: "Parallel API requests:",
     choices: [
-      { name: "3   safe (free tier)", value: "3" },
-      { name: "5   balanced", value: "5" },
-      { name: "10  fast (paid tier)", value: "10" },
-      { name: "15  aggressive", value: "15" },
+      { name: `3       ${chalk.dim("safe, free tier")}`, value: "3" },
+      { name: `5       ${chalk.dim("balanced")}`, value: "5" },
+      { name: `10      ${chalk.dim("fast, paid tier")}`, value: "10" },
+      { name: `15      ${chalk.dim("aggressive")}`, value: "15" },
     ],
     default: "5",
   });
@@ -97,22 +97,23 @@ async function interactiveGenerate(): Promise<void> {
   const model = await select({
     message: "Gemini model:",
     choices: [
-      { name: "gemini-2.5-flash   fast & cheap", value: "gemini-2.5-flash" },
-      { name: "gemini-2.5-pro     higher quality", value: "gemini-2.5-pro" },
+      { name: `gemini-2.5-flash   ${chalk.dim("fast")}`, value: "gemini-2.5-flash" },
+      { name: `gemini-2.5-pro     ${chalk.dim("higher quality")}`, value: "gemini-2.5-pro" },
     ],
     default: "gemini-2.5-flash",
   });
 
   // ── Summary & confirm ──────────────────────────────────────────────────
   console.log();
-  console.log(chalk.dim("  ┌─────────────────────────────────────────────────┐"));
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Project")}       ${chalk.white(resolvedProject)}`);
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Modules")}       ${selectedModules.length > 0 ? chalk.white(selectedModules.join(", ")) : chalk.dim("all")}`);
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Output")}        ${resolvedOutput ? chalk.white(resolvedOutput) : chalk.dim("next to controllers")}`);
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Mode")}          ${mode === "dry-run" ? chalk.yellow("dry-run") : chalk.green("generate")}`);
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Concurrency")}   ${chalk.white(concurrency)}`);
-  console.log(`  ${chalk.dim("│")} ${chalk.bold("Model")}         ${chalk.white(model)}`);
-  console.log(chalk.dim("  └─────────────────────────────────────────────────┘"));
+  const dim = chalk.dim;
+  console.log(dim("  +" + "-".repeat(50)));
+  console.log(`  ${dim("|")} ${dim("Project")}       ${resolvedProject}`);
+  console.log(`  ${dim("|")} ${dim("Modules")}       ${selectedModules.length > 0 ? selectedModules.join(", ") : dim("all")}`);
+  console.log(`  ${dim("|")} ${dim("Output")}        ${resolvedOutput ?? dim("next to controllers")}`);
+  console.log(`  ${dim("|")} ${dim("Mode")}          ${mode === "dry-run" ? "dry-run" : "write"}`);
+  console.log(`  ${dim("|")} ${dim("Concurrency")}   ${concurrency}`);
+  console.log(`  ${dim("|")} ${dim("Model")}         ${model}`);
+  console.log(dim("  +" + "-".repeat(50)));
   console.log();
 
   const proceed = await confirm({ message: "Start?", default: true });
@@ -135,7 +136,7 @@ async function interactiveGenerate(): Promise<void> {
 
 async function interactiveRetry(): Promise<void> {
   const count = getFailedCount();
-  console.log(chalk.yellow(`  ${count} endpoints failed in the last run.\n`));
+  console.log(chalk.dim(`  ${count} failed endpoints from last run.\n`));
 
   const project = await input({
     message: "NestJS project path:",
@@ -211,22 +212,22 @@ export async function runInteractive(): Promise<void> {
   printBanner();
 
   const choices = [
-    { name: `${chalk.green("⚡ Generate")}   Create DTOs and Swagger decorators`, value: "generate" },
+    { name: `Generate    ${chalk.dim("Create DTOs and Swagger decorators")}`, value: "generate" },
   ];
 
   // Show retry option only if there are failed endpoints
   if (hasRetryFile()) {
     const count = getFailedCount();
     choices.push({
-      name: `${chalk.red("🔄 Retry")}      Re-run ${count} failed endpoints`,
+      name: `Retry       ${chalk.dim(`Re-run ${count} failed endpoints`)}`,
       value: "retry",
     });
   }
 
   choices.push(
-    { name: `${chalk.cyan("🔍 Parse")}      Analyze project endpoints`, value: "parse" },
-    { name: `${chalk.yellow("⚙  Init")}       Create .documentator.json config`, value: "init" },
-    { name: `${chalk.dim("❓ Help")}       Show CLI usage`, value: "help" },
+    { name: `Parse       ${chalk.dim("Analyze project endpoints")}`, value: "parse" },
+    { name: `Init        ${chalk.dim("Create .documentator.json config")}`, value: "init" },
+    { name: `Help        ${chalk.dim("Show CLI usage")}`, value: "help" },
   );
 
   const action = await select({

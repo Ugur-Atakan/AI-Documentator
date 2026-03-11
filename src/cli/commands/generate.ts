@@ -4,7 +4,7 @@ import chalk from "chalk";
 import { execSync } from "child_process";
 import { loadTasks } from "../../nodes/task-loader.js";
 import { executeParallel } from "../../executor/parallel-executor.js";
-import { printBanner, printConfig, printEndpointPreview, printSummary } from "../ui.js";
+import { printConfig, printEndpointPreview, printSummary } from "../ui.js";
 import { resolveConfig } from "../config-loader.js";
 import { loadFailedEndpointIds, filterToFailed } from "../../executor/retry-store.js";
 
@@ -20,8 +20,6 @@ export interface GenerateOptions {
 }
 
 export async function generateCommand(opts: GenerateOptions): Promise<void> {
-  printBanner();
-
   const config = resolveConfig(opts);
 
   if (!fs.existsSync(config.project)) {
@@ -35,8 +33,7 @@ export async function generateCommand(opts: GenerateOptions): Promise<void> {
     process.exit(1);
   }
 
-  // ── Step 1: Parse ───────────────────────────────────────────────────────
-  console.log("  Step 1: Parsing NestJS project...\n");
+  console.log(chalk.dim("  Parsing project...\n"));
   const parsedOutputPath = path.join(process.cwd(), ".documentator_cache.json");
 
   try {
@@ -64,11 +61,11 @@ export async function generateCommand(opts: GenerateOptions): Promise<void> {
   if (opts.retry) {
     const failedIds = loadFailedEndpointIds();
     if (!failedIds || failedIds.length === 0) {
-      console.log(chalk.green("  No failed endpoints to retry. All clear!\n"));
+      console.log(chalk.dim("  No failed endpoints to retry.\n"));
       return;
     }
     taskQueue = filterToFailed(taskQueue, failedIds);
-    console.log(chalk.yellow(`  Retry mode: ${taskQueue.length} previously failed endpoints\n`));
+    console.log(chalk.dim(`  Retrying ${taskQueue.length} failed endpoints\n`));
   }
 
   // Module filter
@@ -101,8 +98,7 @@ export async function generateCommand(opts: GenerateOptions): Promise<void> {
     console.log(`    ... and ${taskQueue.length - 30} more\n`);
   }
 
-  // ── Step 3: Generate ──────────────────────────────────────────────────
-  console.log("  Step 2: Generating documentation...\n");
+  console.log(chalk.dim("  Generating...\n"));
 
   const result = await executeParallel(taskQueue, {
     concurrency: config.concurrency,

@@ -11,43 +11,38 @@ export interface EndpointLine {
   error?: string;
 }
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER = [".", "..", "..."];
 let frame = 0;
 
-const METHOD_COLOR: Record<string, (s: string) => string> = {
-  GET: chalk.cyan,
-  POST: chalk.green,
-  PUT: chalk.yellow,
-  PATCH: chalk.magenta,
-  DELETE: chalk.red,
-};
+const DIM = chalk.dim;
+const ACCENT = chalk.cyan;
+
+function methodStr(method: string): string {
+  return DIM(method.padEnd(7));
+}
+
+function statusTag(status: EndpointStatus): string {
+  switch (status) {
+    case "pending":  return DIM("       ");
+    case "dto":      return ACCENT("dto    ");
+    case "swagger":  return ACCENT("swagger");
+    case "writing":  return ACCENT("write  ");
+    case "done":     return DIM("done   ");
+    case "failed":   return chalk.red("failed ");
+    case "skipped":  return DIM("skip   ");
+  }
+}
 
 function statusIcon(status: EndpointStatus): string {
   switch (status) {
-    case "pending":  return chalk.gray("○");
-    case "dto":      return chalk.cyan(SPINNER[frame % SPINNER.length]);
-    case "swagger":  return chalk.blue(SPINNER[frame % SPINNER.length]);
-    case "writing":  return chalk.yellow(SPINNER[frame % SPINNER.length]);
-    case "done":     return chalk.green("●");
-    case "failed":   return chalk.red("✖");
-    case "skipped":  return chalk.dim("◌");
+    case "pending":  return DIM("  ");
+    case "dto":
+    case "swagger":
+    case "writing":  return ACCENT(SPINNER[frame % SPINNER.length].padEnd(3));
+    case "done":     return DIM("ok ");
+    case "failed":   return chalk.red("x  ");
+    case "skipped":  return DIM("-  ");
   }
-}
-
-function statusLabel(status: EndpointStatus): string {
-  switch (status) {
-    case "pending":  return chalk.gray("waiting");
-    case "dto":      return chalk.cyan("generating DTOs");
-    case "swagger":  return chalk.blue("generating Swagger");
-    case "writing":  return chalk.yellow("writing files");
-    case "done":     return chalk.green("done");
-    case "failed":   return chalk.red("failed");
-    case "skipped":  return chalk.dim("skipped");
-  }
-}
-
-function methodStr(method: string): string {
-  return (METHOD_COLOR[method] ?? chalk.white)(method.padEnd(7));
 }
 
 /**
@@ -70,7 +65,7 @@ export class Renderer {
     this.interval = setInterval(() => {
       frame++;
       this.render();
-    }, 80);
+    }, 200);
   }
 
   update(index: number, status: EndpointStatus, error?: string): void {
@@ -91,15 +86,13 @@ export class Renderer {
     const remaining = total - done - failed - skipped - active;
     const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
 
-    // Progress bar
+    // Progress bar — clean monochrome
     const pct = total > 0 ? (done + failed + skipped) / total : 0;
     const barWidth = 30;
     const filled = Math.round(pct * barWidth);
-    const bar =
-      chalk.cyan("█".repeat(filled)) +
-      chalk.gray("░".repeat(barWidth - filled));
+    const bar = ACCENT("=".repeat(filled)) + DIM("-".repeat(barWidth - filled));
 
-    // Collect visible endpoint lines: active first, then last few done, then pending peek
+    // Collect visible lines: recent done, active, pending peek
     const activeEps = this.endpoints.filter((e) =>
       ["dto", "swagger", "writing"].includes(e.status)
     );
@@ -108,48 +101,39 @@ export class Renderer {
       .slice(-3);
     const pendingPeek = this.endpoints
       .filter((e) => e.status === "pending")
-      .slice(0, 2);
+      .slice(0, 1);
 
     const epLines: string[] = [];
 
     for (const ep of recentDone) {
-      epLines.push(
-        `  ${statusIcon(ep.status)} ${methodStr(ep.method)} ${chalk.dim(truncate(ep.path, 38))} ${statusLabel(ep.status)}`
-      );
+      epLines.push(`  ${statusIcon(ep.status)}${methodStr(ep.method)} ${DIM(truncate(ep.path, 36))} ${statusTag(ep.status)}`);
     }
     for (const ep of activeEps) {
-      epLines.push(
-        `  ${statusIcon(ep.status)} ${methodStr(ep.method)} ${chalk.white(truncate(ep.path, 38))} ${statusLabel(ep.status)}`
-      );
+      epLines.push(`  ${statusIcon(ep.status)}${methodStr(ep.method)} ${truncate(ep.path, 36)} ${statusTag(ep.status)}`);
     }
     for (const ep of pendingPeek) {
-      epLines.push(
-        `  ${statusIcon(ep.status)} ${methodStr(ep.method)} ${chalk.gray(truncate(ep.path, 38))} ${statusLabel(ep.status)}`
-      );
+      epLines.push(`  ${statusIcon(ep.status)}${methodStr(ep.method)} ${DIM(truncate(ep.path, 36))}`);
     }
 
     if (remaining > pendingPeek.length) {
-      epLines.push(chalk.gray(`  ... ${remaining - pendingPeek.length} more waiting`));
+      epLines.push(DIM(`  + ${remaining - pendingPeek.length} more`));
     }
 
     // Build fixed-height output
     const lines: string[] = [
       "",
-      `  ${bar} ${chalk.bold(Math.round(pct * 100) + "%")} ${chalk.dim(`(${elapsed}s)`)}`,
+      `  [${bar}] ${Math.round(pct * 100)}% ${DIM("(" + elapsed + "s")}${DIM(")")}`,
       "",
       ...epLines,
     ];
 
     // Pad to fixed height
-    while (lines.length < this.VISIBLE_LINES - 2) {
+    while (lines.length < this.VISIBLE_LINES - 1) {
       lines.push("");
     }
 
-    // Footer (always last 2 lines)
-    lines.push(chalk.dim("  ─".repeat(25)));
-    lines.push(
-      `  ${chalk.green("● " + done)} done  ${chalk.red("✖ " + failed)} failed  ${chalk.cyan("⠹ " + active)} active  ${chalk.gray("○ " + remaining)} pending`
-    );
+    // Footer
+    lines.push(DIM(`  ${done}/${total} done`) + (failed > 0 ? chalk.red(`  ${failed} failed`) : "") + (active > 0 ? ACCENT(`  ${active} active`) : ""));
 
     logUpdate(lines.join("\n"));
   }
