@@ -3,110 +3,154 @@ import * as path from "path";
 import * as fs from "fs";
 import { execSync } from "child_process";
 import { loadTasks } from "./src/nodes/task-loader.js";
-import { buildDocGenGraph } from "./src/graph/doc-gen-graph.js";
+import { executeParallel } from "./src/executor/parallel-executor.js";
+import { printBanner, printConfig, printEndpointPreview, printSummary } from "./src/cli/ui.js";
+import type { DocGenConfig } from "./src/config.js";
 
-const args = process.argv.slice(2);
-const projectFlag = args.indexOf("--project");
+function printUsage() {
+  console.log(`
+Usage: tsx doc-gen.ts --project <path> [options]
 
-if (projectFlag === -1 || !args[projectFlag + 1]) {
-  console.error("Usage: tsx doc-gen.ts --project /path/to/nestjs-project");
-  console.error("Options:");
-  console.error("  --project <path>   Path to NestJS project root (required)");
-  console.error("  --output <path>    Path to save parsed_endpoints.json (default: ./parsed_endpoints.json)");
-  process.exit(1);
+Required:
+  --project <path>       Path to the NestJS project root
+
+Output:
+  --output-dir <path>    Write all generated files to this directory
+  --dry-run              Print generated code to stdout, do not write files
+  --no-skip-existing     Re-generate even if output files already exist
+
+Filtering:
+  --module <name>        Only process controllers matching this substring
+                         (can be repeated: --module auth --module mailbox)
+
+Performance:
+  --concurrency <n>      Max parallel endpoint processing (default: 5)
+  --model <name>         Gemini model (default: gemini-2.5-flash)
+
+Advanced:
+  --parsed-output <path> Path to save intermediate parsed_endpoints.json
+
+Examples:
+  tsx doc-gen.ts --project ../vmh-server-v2 --output-dir ./output --module mailbox --dry-run
+  tsx doc-gen.ts --project ../vmh-server-v2 --output-dir ./output --concurrency 10
+`);
 }
 
-const projectRoot = path.resolve(args[projectFlag + 1]);
-const outputFlag = args.indexOf("--output");
-const parsedOutputPath = outputFlag !== -1 && args[outputFlag + 1]
-  ? path.resolve(args[outputFlag + 1])
-  : path.join(process.cwd(), "parsed_endpoints.json");
-
-if (!fs.existsSync(projectRoot)) {
-  console.error(`Project not found: ${projectRoot}`);
-  process.exit(1);
+interface CliArgs extends DocGenConfig {
+  parsedOutput: string;
+  concurrency: number;
 }
 
-const apiKey = process.env.GOOGLE_API_KEY;
-if (!apiKey) {
-  console.error("GOOGLE_API_KEY not set in .env");
-  process.exit(1);
+function parseArgs(args: string[]): CliArgs {
+  const projectIdx = args.indexOf("--project");
+  if (projectIdx === -1 || !args[projectIdx + 1]) {
+    printUsage();
+    process.exit(1);
+  }
+
+  const project = path.resolve(args[projectIdx + 1]);
+
+  const get = (flag: string) => {
+    const i = args.indexOf(flag);
+    return i !== -1 && args[i + 1] ? args[i + 1] : undefined;
+  };
+
+  const modules: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--module" && args[i + 1]) modules.push(args[i + 1]);
+  }
+
+  return {
+    project,
+    outputDir: get("--output-dir") ? path.resolve(get("--output-dir")!) : undefined,
+    dryRun: args.includes("--dry-run"),
+    skipExisting: !args.includes("--no-skip-existing"),
+    modules: modules.length > 0 ? modules : undefined,
+    model: get("--model") ?? "gemini-2.5-flash",
+    concurrency: parseInt(get("--concurrency") ?? "5", 10),
+    parsedOutput: get("--parsed-output")
+      ? path.resolve(get("--parsed-output")!)
+      : path.join(process.cwd(), "parsed_endpoints.json"),
+  };
 }
 
 async function main() {
-  console.log("NestJS AI Documentation Generator");
-  console.log("==================================");
-  console.log(`Target project: ${projectRoot}`);
-  console.log("");
+  const args = parseArgs(process.argv.slice(2));
 
-  // Step 1: Run the parser
-  console.log("Step 1: Parsing NestJS project with ts-morph...");
+  printBanner();
+
+  if (!fs.existsSync(args.project)) {
+    console.error(`Project not found: ${args.project}`);
+    process.exit(1);
+  }
+
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    console.error("GOOGLE_API_KEY not set in .env");
+    process.exit(1);
+  }
+
+  // ── Step 1: Parse ─────────────────────────────────────────────────────────
+  console.log("  Step 1: Parsing NestJS project with ts-morph...\n");
   try {
     const parserScript = path.join(process.cwd(), "src/parser/nestjs-parser.ts");
     execSync(
-      `tsx "${parserScript}" --project "${projectRoot}" > "${parsedOutputPath}"`,
+      `./node_modules/.bin/tsx "${parserScript}" --project "${args.project}" > "${args.parsedOutput}"`,
       { stdio: ["inherit", "pipe", "inherit"] }
     );
-    console.log(`Parser output saved to: ${parsedOutputPath}`);
   } catch (err) {
     console.error("Parser failed:", err);
     process.exit(1);
   }
 
-  // Step 2: Load tasks
-  console.log("\nStep 2: Building task queue...");
-  const { taskQueue, prismaSchema } = loadTasks(parsedOutputPath);
-  const parsedEndpoints = taskQueue.map((t) => t.endpoint);
+  // ── Step 2: Load & filter ─────────────────────────────────────────────────
+  let { taskQueue, prismaSchema } = loadTasks(args.parsedOutput);
 
-  console.log(`Endpoints found: ${parsedEndpoints.length}`);
-  console.log(`Prisma schema: ${prismaSchema ? "loaded" : "not found"}`);
-  console.log("");
+  if (args.modules?.length) {
+    taskQueue = taskQueue.filter((t) =>
+      args.modules!.some((mod) =>
+        t.endpoint.controllerFilePath.toLowerCase().includes(mod.toLowerCase())
+      )
+    );
+  }
 
-  if (parsedEndpoints.length === 0) {
-    console.log("No endpoints found. Exiting.");
+  if (taskQueue.length === 0) {
+    console.log("  No endpoints to process. Exiting.\n");
     return;
   }
 
-  // Preview task list
-  console.log("Endpoints to document:");
-  for (const task of taskQueue) {
-    const e = task.endpoint;
-    const traced = e.tracedService ? `-> ${e.tracedService.serviceClassName}.${e.tracedService.methodName}` : "(service not traced)";
-    console.log(`  [${e.httpMethod.padEnd(6)}] ${e.routePath.padEnd(40)} ${traced}`);
+  printConfig({
+    project: args.project,
+    outputDir: args.outputDir,
+    dryRun: args.dryRun ?? false,
+    skipExisting: args.skipExisting ?? true,
+    modules: args.modules,
+    model: args.model ?? "gemini-2.5-flash",
+    concurrency: args.concurrency,
+    endpointCount: taskQueue.length,
+  });
+
+  printEndpointPreview(taskQueue.slice(0, 30));
+  if (taskQueue.length > 30) {
+    console.log(`    ... and ${taskQueue.length - 30} more\n`);
   }
-  console.log("");
 
-  // Step 3: Run LangGraph documentation generation
-  console.log("Step 3: Generating documentation with LLM (one endpoint at a time)...");
-  const graph = buildDocGenGraph(apiKey!, prismaSchema);
+  // ── Step 3: Parallel generation ───────────────────────────────────────────
+  console.log("  Step 2: Generating documentation...\n");
 
-  const result = await graph.invoke(
-    {
-      projectRoot,
-      parsedEndpoints,
-      prismaSchema,
-      taskQueue,
-      currentTaskIndex: 0,
-      completedTasks: [],
-      failedTasks: [],
-      writeLog: [],
+  const result = await executeParallel(taskQueue, {
+    concurrency: args.concurrency,
+    model: args.model ?? "gemini-2.5-flash",
+    apiKey,
+    fullPrismaSchema: prismaSchema,
+    writerOptions: {
+      outputDir: args.outputDir,
+      dryRun: args.dryRun ?? false,
+      skipExisting: args.skipExisting ?? true,
     },
-    { recursionLimit: parsedEndpoints.length * 3 + 10 }
-  );
+  });
 
-  // Summary
-  console.log("\n==================================");
-  console.log("DONE");
-  console.log(`  Completed: ${result.completedTasks.length}`);
-  console.log(`  Failed:    ${result.failedTasks.length}`);
-  console.log(`  Files written: ${result.writeLog.length}`);
-
-  if (result.failedTasks.length > 0) {
-    console.log("\nFailed endpoints:");
-    for (const t of result.failedTasks) {
-      console.log(`  - ${t.endpoint.httpMethod} ${t.endpoint.routePath}: ${t.error}`);
-    }
-  }
+  printSummary(result);
 }
 
 main().catch((err) => {

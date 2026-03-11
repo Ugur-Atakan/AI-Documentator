@@ -71,11 +71,6 @@ export async function withRetry<T>(
         waitMs = base + Math.random() * 1000;
       }
 
-      const waitSec = (waitMs / 1000).toFixed(1);
-      console.error(
-        `  [retry] ${label} — attempt ${attempt}/${maxAttempts} failed. Waiting ${waitSec}s... (${msg.slice(0, 80)})`
-      );
-
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }

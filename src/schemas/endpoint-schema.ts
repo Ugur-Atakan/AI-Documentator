@@ -15,6 +15,27 @@ export const TracedServiceMethodSchema = z.object({
   prismaModelsReferenced: z.array(z.string()),
 });
 
+export const AuthContextSchema = z.object({
+  isPublic: z.boolean(),
+  requiresBearerAuth: z.boolean(),
+  guards: z.array(z.string()),
+  requiredPermission: z
+    .object({ action: z.string(), subject: z.string() })
+    .optional(),
+  requiredRoles: z.array(z.string()).optional(),
+  currentUserUsages: z.array(z.string()),
+  requiresContext: z.boolean(),
+});
+
+export const ExistingSwaggerSchema = z.object({
+  hasApiOperation: z.boolean(),
+  hasApiResponse: z.boolean(),
+  hasBearerAuthOnClass: z.boolean(),
+  hasApiTags: z.boolean(),
+  apiTags: z.array(z.string()),
+  hasApiBody: z.boolean(),
+});
+
 export const ParsedEndpointSchema = z.object({
   id: z.string(),
   controllerClass: z.string(),
@@ -27,6 +48,8 @@ export const ParsedEndpointSchema = z.object({
   controllerMethodCode: z.string(),
   tracedService: TracedServiceMethodSchema.nullable(),
   traceFailureReason: z.string().optional(),
+  authContext: AuthContextSchema,
+  existingSwagger: ExistingSwaggerSchema,
 });
 
 export const ParserOutputSchema = z.object({

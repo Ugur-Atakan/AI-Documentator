@@ -10,6 +10,8 @@ import {
   Node,
 } from "ts-morph";
 import type {
+  AuthContext,
+  ExistingSwagger,
   ParsedEndpoint,
   ParsedParam,
   ParserOutput,
@@ -42,9 +44,7 @@ function getControllerBasePath(cls: ClassDeclaration): string {
     if (dec.getName() === "Controller") {
       const args = dec.getArguments();
       if (args.length > 0) {
-        const arg = args[0];
-        const text = arg.getText().replace(/['"]/g, "");
-        return text;
+        return args[0].getText().replace(/['"]/g, "");
       }
     }
   }
@@ -118,6 +118,119 @@ function extractPrismaModels(sourceCode: string): string[] {
   return Array.from(models);
 }
 
+/**
+ * Extract authentication / authorization context from class and method decorators.
+ * Handles vmh-server patterns: @Public, @CurrentUser, @Context,
+ * @RequirePermission, @Roles, @UseGuards.
+ */
+function extractAuthContext(
+  cls: ClassDeclaration,
+  method: MethodDeclaration
+): AuthContext {
+  const classDecNames = cls.getDecorators().map((d) => d.getName());
+  const methodDecNames = method.getDecorators().map((d) => d.getName());
+  const allDecNames = [...classDecNames, ...methodDecNames];
+
+  const isPublic = allDecNames.includes("Public");
+
+  // Collect all guards from class-level and method-level @UseGuards(...)
+  const guards: string[] = [];
+  for (const src of [cls.getDecorators(), method.getDecorators()]) {
+    for (const dec of src) {
+      if (dec.getName() === "UseGuards") {
+        for (const arg of dec.getArguments()) {
+          guards.push(arg.getText().trim());
+        }
+      }
+    }
+  }
+
+  const hasJwtGuard = guards.some(
+    (g) => g.includes("JwtAuthGuard") || g.includes("AuthGuard")
+  );
+  const requiresBearerAuth =
+    !isPublic &&
+    (allDecNames.includes("ApiBearerAuth") || hasJwtGuard);
+
+  // @RequirePermission(action, subject)
+  let requiredPermission: AuthContext["requiredPermission"];
+  for (const dec of method.getDecorators()) {
+    if (dec.getName() === "RequirePermission") {
+      const args = dec.getArguments();
+      if (args.length >= 2) {
+        requiredPermission = {
+          action: args[0].getText().replace(/['"]/g, ""),
+          subject: args[1].getText().replace(/['"]/g, ""),
+        };
+      }
+    }
+  }
+
+  // @Roles(RoleType.ADMIN, ...)
+  let requiredRoles: string[] | undefined;
+  for (const dec of [...cls.getDecorators(), ...method.getDecorators()]) {
+    if (dec.getName() === "Roles") {
+      requiredRoles = dec.getArguments().map((a) => a.getText().replace(/['"]/g, ""));
+    }
+  }
+
+  // @CurrentUser() or @CurrentUser('id')
+  const currentUserUsages: string[] = [];
+  for (const param of method.getParameters()) {
+    for (const dec of param.getDecorators()) {
+      if (dec.getName() === "CurrentUser") {
+        const args = dec.getArguments();
+        currentUserUsages.push(args.length > 0 ? args[0].getText().replace(/['"]/g, "") : "full");
+      }
+    }
+  }
+
+  // @Context() — provides workspaceId + mailboxId from JWT
+  const requiresContext = method
+    .getParameters()
+    .some((p) => p.getDecorators().some((d) => d.getName() === "Context"));
+
+  return {
+    isPublic,
+    requiresBearerAuth,
+    guards,
+    requiredPermission,
+    requiredRoles,
+    currentUserUsages,
+    requiresContext,
+  };
+}
+
+/**
+ * Detect which Swagger decorators already exist at class or method level
+ * so prompts can avoid generating duplicates.
+ */
+function extractExistingSwagger(
+  cls: ClassDeclaration,
+  method: MethodDeclaration
+): ExistingSwagger {
+  const classDecNames = cls.getDecorators().map((d) => d.getName());
+  const methodDecNames = method.getDecorators().map((d) => d.getName());
+
+  const apiTags: string[] = [];
+  for (const dec of cls.getDecorators()) {
+    if (dec.getName() === "ApiTags") {
+      for (const arg of dec.getArguments()) {
+        apiTags.push(arg.getText().replace(/['"]/g, ""));
+      }
+    }
+  }
+
+  return {
+    hasApiOperation: methodDecNames.includes("ApiOperation"),
+    hasApiResponse: methodDecNames.includes("ApiResponse"),
+    hasBearerAuthOnClass: classDecNames.includes("ApiBearerAuth"),
+    hasApiTags: classDecNames.includes("ApiTags"),
+    apiTags,
+    hasApiBody: methodDecNames.includes("ApiBody"),
+  };
+}
+
 function traceServiceMethod(
   method: MethodDeclaration,
   project: Project
@@ -125,7 +238,6 @@ function traceServiceMethod(
   const body = method.getBody();
   if (!body) return { result: null, reason: "No method body" };
 
-  // Strategy A & B: Find call expressions like this.xService.methodName(...)
   const callExprs = body.getDescendantsOfKind(SyntaxKind.CallExpression);
 
   for (const call of callExprs) {
@@ -143,6 +255,7 @@ function traceServiceMethod(
 
     const calledMethodName = expr.getName();
 
+    // Strategy A: symbol resolution (fastest, most accurate)
     try {
       const symbol = expr.getSymbol();
       if (!symbol) throw new Error("No symbol");
@@ -178,10 +291,10 @@ function traceServiceMethod(
         };
       }
     } catch {
-      // Strategy A/B failed for this call, try regex fallback below
+      // Strategy A failed, fall through to B
     }
 
-    // Strategy C: regex fallback - find the service class via constructor injection
+    // Strategy B: find service class via constructor type name
     try {
       const classDecl = method.getParent();
       if (!Node.isClassDeclaration(classDecl)) continue;
@@ -191,8 +304,7 @@ function traceServiceMethod(
 
       let serviceTypeName: string | undefined;
       for (const ctorParam of ctor.getParameters()) {
-        const paramName = ctorParam.getName();
-        if (paramName === fieldName) {
+        if (ctorParam.getName() === fieldName) {
           serviceTypeName = ctorParam.getTypeNode()?.getText();
           break;
         }
@@ -200,7 +312,6 @@ function traceServiceMethod(
 
       if (!serviceTypeName) continue;
 
-      // Find the class in the project
       for (const sourceFile of project.getSourceFiles()) {
         for (const cls of sourceFile.getClasses()) {
           if (cls.getName() === serviceTypeName) {
@@ -229,7 +340,7 @@ function traceServiceMethod(
         }
       }
     } catch {
-      // Strategy C also failed
+      // Strategy B failed
     }
   }
 
@@ -261,7 +372,7 @@ function buildMethodSignature(method: MethodDeclaration): string {
   return `${method.getName()}(${params})${returnType}`;
 }
 
-function parseNestJSProject(projectRoot: string): ParserOutput {
+export function parseNestJSProject(projectRoot: string): ParserOutput {
   const tsconfigPath = path.join(projectRoot, "tsconfig.json");
   if (!fs.existsSync(tsconfigPath)) {
     throw new Error(`tsconfig.json not found at: ${tsconfigPath}`);
@@ -272,14 +383,12 @@ function parseNestJSProject(projectRoot: string): ParserOutput {
     skipAddingFilesFromTsConfig: false,
   });
 
-  // Also add any .ts files not included in tsconfig
   project.addSourceFilesFromTsConfig(tsconfigPath);
 
   const endpoints: ParsedEndpoint[] = [];
 
   for (const sourceFile of project.getSourceFiles()) {
     const filePath = sourceFile.getFilePath();
-    // Skip node_modules
     if (filePath.includes("node_modules")) continue;
 
     for (const cls of sourceFile.getClasses()) {
@@ -298,6 +407,8 @@ function parseNestJSProject(projectRoot: string): ParserOutput {
         const { httpMethod, routePath: subPath } = httpInfo;
         const fullPath = normalizePath(basePath, subPath);
         const params = extractParams(method);
+        const authContext = extractAuthContext(cls, method);
+        const existingSwagger = extractExistingSwagger(cls, method);
         const { result: tracedService, reason: traceFailureReason } =
           traceServiceMethod(method, project);
 
@@ -313,12 +424,13 @@ function parseNestJSProject(projectRoot: string): ParserOutput {
           controllerMethodCode: method.getText(),
           tracedService,
           traceFailureReason,
+          authContext,
+          existingSwagger,
         });
       }
     }
   }
 
-  // Read Prisma schema
   const prismaSchemaPath = path.join(projectRoot, "prisma", "schema.prisma");
   const hasPrisma = fs.existsSync(prismaSchemaPath);
 
