@@ -1,6 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { EndpointTask, GeneratedDocs } from "../types/endpoint.js";
+import type { ConsolidatedOutput, ControllerGroup } from "../types/controller-group.js";
+import { controllerToKebab } from "../utils/group-by-controller.js";
+import { runSafetyChecks } from "../utils/safety-guard.js";
 
 export interface FileWriterOptions {
   /** If set, all output goes to this directory instead of next to the controller. */
@@ -80,7 +83,8 @@ function buildDecoratorFileContent(
   const decoratorLines = controllerDecorators
     .split("\n")
     .map((l) => l.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((l) => l.startsWith("@") ? l.slice(1) : l);
 
   for (const dec of decoratorLines) {
     lines.push(`  ${dec},`);
@@ -102,6 +106,9 @@ function writeOrDryRun(
   if (skipExisting && fs.existsSync(filePath)) {
     return;
   }
+
+  // Safety check before writing
+  runSafetyChecks(content, filePath);
 
   if (dryRun) {
     written.push(`[dry-run] ${filePath}`);
@@ -177,6 +184,75 @@ export function writeGeneratedDocs(
   );
 
   writeOrDryRun(decoratorPath, decoratorContent, dryRun, skipExisting, written);
+
+  return written;
+}
+
+/**
+ * Writes consolidated per-controller output files.
+ * New pipeline: one file per type per controller instead of per endpoint.
+ *
+ * Output structure (with outputDir):
+ *   {outputDir}/{module}/dto/{controller-kebab}.request.dto.ts
+ *   {outputDir}/{module}/dto/{controller-kebab}.response.dto.ts
+ *   {outputDir}/{module}/dto/{controller-kebab}.enums.ts
+ *   {outputDir}/{module}/decorators/{controller-kebab}.decorators.ts
+ *
+ * Output structure (without outputDir — next to controller):
+ *   {controllerDir}/dto/{controller-kebab}.request.dto.ts
+ *   {controllerDir}/dto/{controller-kebab}.response.dto.ts
+ *   {controllerDir}/dto/{controller-kebab}.enums.ts
+ *   {controllerDir}/decorators/{controller-kebab}.decorators.ts
+ */
+export function writeConsolidatedDocs(
+  group: ControllerGroup,
+  output: ConsolidatedOutput,
+  options: FileWriterOptions = {}
+): string[] {
+  const { outputDir, dryRun = false, skipExisting = true } = options;
+
+  const controllerKebab = controllerToKebab(group.controllerClass);
+  const controllerDir = path.dirname(group.controllerFilePath);
+
+  let dtoDir: string;
+  let decoratorDir: string;
+
+  if (outputDir) {
+    const moduleDir = path.join(outputDir, group.moduleName);
+    dtoDir = path.join(moduleDir, "dto");
+    decoratorDir = path.join(moduleDir, "decorators");
+  } else {
+    dtoDir = path.join(controllerDir, "dto");
+    decoratorDir = path.join(controllerDir, "decorators");
+  }
+
+  const written: string[] = [];
+
+  // Request DTOs
+  if (output.requestDtoCode) {
+    const requestPath = path.join(dtoDir, `${controllerKebab}.request.dto.ts`);
+    writeOrDryRun(requestPath, output.requestDtoCode, dryRun, skipExisting, written);
+    output.outputPaths.requestDto = requestPath;
+  }
+
+  // Response DTOs
+  if (output.responseDtoCode) {
+    const responsePath = path.join(dtoDir, `${controllerKebab}.response.dto.ts`);
+    writeOrDryRun(responsePath, output.responseDtoCode, dryRun, skipExisting, written);
+    output.outputPaths.responseDto = responsePath;
+  }
+
+  // Enums
+  if (output.enumsCode) {
+    const enumsPath = path.join(dtoDir, `${controllerKebab}.enums.ts`);
+    writeOrDryRun(enumsPath, output.enumsCode, dryRun, skipExisting, written);
+    output.outputPaths.enums = enumsPath;
+  }
+
+  // Decorators
+  const decoratorsPath = path.join(decoratorDir, `${controllerKebab}.decorators.ts`);
+  writeOrDryRun(decoratorsPath, output.decoratorsCode, dryRun, skipExisting, written);
+  output.outputPaths.decorators = decoratorsPath;
 
   return written;
 }

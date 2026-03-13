@@ -6,6 +6,7 @@ import { printBanner } from "./ui.js";
 import { generateCommand } from "./commands/generate.js";
 import { parseCommand } from "./commands/parse.js";
 import { initCommand } from "./commands/init.js";
+import { applyCommand } from "./commands/apply.js";
 import { suggestOutputDirs } from "./suggest-output.js";
 import { hasRetryFile, getFailedCount } from "../executor/retry-store.js";
 
@@ -72,6 +73,24 @@ async function interactiveGenerate(): Promise<void> {
   }
   const resolvedOutput = finalOutputDir ? path.resolve(finalOutputDir) : undefined;
 
+  // ── Pipeline mode ─────────────────────────────────────────────────────
+  const pipeline = await select({
+    message: "Pipeline mode:",
+    choices: [
+      {
+        name: `Multi-agent  ${chalk.dim("per-controller, Planner + Writer (recommended)")}`,
+        value: "multi-agent",
+      },
+      {
+        name: `Legacy       ${chalk.dim("per-endpoint, single model")}`,
+        value: "legacy",
+      },
+    ],
+    default: "multi-agent",
+  });
+
+  const isLegacy = pipeline === "legacy";
+
   // ── Mode ────────────────────────────────────────────────────────────────
   const mode = await select({
     message: "Execution mode:",
@@ -93,15 +112,39 @@ async function interactiveGenerate(): Promise<void> {
     default: "5",
   });
 
-  // ── Model ───────────────────────────────────────────────────────────────
-  const model = await select({
-    message: "Gemini model:",
-    choices: [
-      { name: `gemini-2.5-flash   ${chalk.dim("fast")}`, value: "gemini-2.5-flash" },
-      { name: `gemini-2.5-pro     ${chalk.dim("higher quality")}`, value: "gemini-2.5-pro" },
-    ],
-    default: "gemini-2.5-flash",
-  });
+  // ── Model selection ───────────────────────────────────────────────────
+  let model = "gemini-2.5-flash";
+  let plannerModel: string | undefined;
+  let writerModel: string | undefined;
+
+  if (isLegacy) {
+    model = await select({
+      message: "Gemini model:",
+      choices: [
+        { name: `gemini-2.5-flash   ${chalk.dim("fast")}`, value: "gemini-2.5-flash" },
+        { name: `gemini-2.5-pro     ${chalk.dim("higher quality")}`, value: "gemini-2.5-pro" },
+      ],
+      default: "gemini-2.5-flash",
+    });
+  } else {
+    plannerModel = await select({
+      message: "Planner model (reasoning, schema design):",
+      choices: [
+        { name: `gemini-2.5-pro     ${chalk.dim("best reasoning (recommended)")}`, value: "gemini-2.5-pro" },
+        { name: `gemini-2.5-flash   ${chalk.dim("faster, cheaper")}`, value: "gemini-2.5-flash" },
+      ],
+      default: "gemini-2.5-pro",
+    });
+
+    writerModel = await select({
+      message: "Writer model (code generation from schema):",
+      choices: [
+        { name: `gemini-2.5-flash   ${chalk.dim("fast + cheap (recommended)")}`, value: "gemini-2.5-flash" },
+        { name: `gemini-2.5-pro     ${chalk.dim("higher quality")}`, value: "gemini-2.5-pro" },
+      ],
+      default: "gemini-2.5-flash",
+    });
+  }
 
   // ── Summary & confirm ──────────────────────────────────────────────────
   console.log();
@@ -110,9 +153,15 @@ async function interactiveGenerate(): Promise<void> {
   console.log(`  ${dim("|")} ${dim("Project")}       ${resolvedProject}`);
   console.log(`  ${dim("|")} ${dim("Modules")}       ${selectedModules.length > 0 ? selectedModules.join(", ") : dim("all")}`);
   console.log(`  ${dim("|")} ${dim("Output")}        ${resolvedOutput ?? dim("next to controllers")}`);
+  console.log(`  ${dim("|")} ${dim("Pipeline")}      ${pipeline}`);
   console.log(`  ${dim("|")} ${dim("Mode")}          ${mode === "dry-run" ? "dry-run" : "write"}`);
   console.log(`  ${dim("|")} ${dim("Concurrency")}   ${concurrency}`);
-  console.log(`  ${dim("|")} ${dim("Model")}         ${model}`);
+  if (isLegacy) {
+    console.log(`  ${dim("|")} ${dim("Model")}         ${model}`);
+  } else {
+    console.log(`  ${dim("|")} ${dim("Planner")}       ${plannerModel}`);
+    console.log(`  ${dim("|")} ${dim("Writer")}        ${writerModel}`);
+  }
   console.log(dim("  +" + "-".repeat(50)));
   console.log();
 
@@ -131,6 +180,9 @@ async function interactiveGenerate(): Promise<void> {
     concurrency,
     model,
     dryRun: mode === "dry-run",
+    legacy: isLegacy,
+    plannerModel,
+    writerModel,
   });
 }
 
@@ -208,6 +260,53 @@ async function interactiveParse(): Promise<void> {
   await parseCommand({ project: path.resolve(project), output: path.resolve(output) });
 }
 
+async function interactiveApply(): Promise<void> {
+  const project = await input({
+    message: "NestJS project path:",
+    default: "../vmh-server-v2",
+    validate: (val) => {
+      const resolved = path.resolve(val);
+      return fs.existsSync(resolved) || `Not found: ${resolved}`;
+    },
+  });
+
+  const resolvedProject = path.resolve(project);
+
+  const modules = getAvailableModules(resolvedProject);
+  let selectedModules: string[] = [];
+
+  if (modules.length > 0) {
+    const filterModules = await confirm({
+      message: `${modules.length} modules found. Filter by specific modules?`,
+      default: false,
+    });
+
+    if (filterModules) {
+      selectedModules = await checkbox({
+        message: "Select modules:",
+        choices: modules.map((m) => ({ name: m, value: m })),
+        pageSize: 15,
+      });
+    }
+  }
+
+  const mode = await select({
+    message: "Apply mode:",
+    choices: [
+      { name: `Dry-run     ${chalk.dim("preview changes without modifying files")}`, value: "dry-run" },
+      { name: `Write       ${chalk.dim("modify controller files")}`, value: "write" },
+    ],
+  });
+
+  console.log();
+
+  await applyCommand({
+    project: resolvedProject,
+    module: selectedModules.length > 0 ? selectedModules : undefined,
+    write: mode === "write",
+  });
+}
+
 export async function runInteractive(): Promise<void> {
   printBanner();
 
@@ -225,6 +324,7 @@ export async function runInteractive(): Promise<void> {
   }
 
   choices.push(
+    { name: `Apply       ${chalk.dim("Apply decorators and DTOs to controllers")}`, value: "apply" },
     { name: `Parse       ${chalk.dim("Analyze project endpoints")}`, value: "parse" },
     { name: `Init        ${chalk.dim("Create .documentator.json config")}`, value: "init" },
     { name: `Help        ${chalk.dim("Show CLI usage")}`, value: "help" },
@@ -243,6 +343,9 @@ export async function runInteractive(): Promise<void> {
       break;
     case "retry":
       await interactiveRetry();
+      break;
+    case "apply":
+      await interactiveApply();
       break;
     case "parse":
       await interactiveParse();

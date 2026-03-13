@@ -159,13 +159,14 @@ ${queryParams.length > 0 ? `- @ApiQuery for each query param: ${queryParams.map(
 - Use single quotes for strings inside decorators
 
 ## Output format
-Use these EXACT delimiters (no JSON, no markdown fences):
+Use these EXACT delimiters (no JSON, no markdown fences).
+IMPORTANT: Do NOT prefix decorators with @. These will be used inside applyDecorators() where @ is invalid syntax. Write them as plain function calls.
 
 ===SWAGGER_DECORATORS===
-@ApiOperation({ summary: '...' })
-@ApiResponse({ status: ${successStatus}, type: ${responseDtoName} })
-...each decorator on its own line...
+ApiOperation({ summary: '...' })
+ApiResponse({ status: ${successStatus}, type: ${responseDtoName} })
+...each decorator on its own line, NO @ prefix...
 ===END_SWAGGER_DECORATORS===
 
-IMPORTANT: Write the raw decorator lines directly between the delimiters. No JSON wrapping. No markdown fences. No import statements.`;
+IMPORTANT: Write the raw decorator FUNCTION CALLS between the delimiters. No @ prefix. No JSON wrapping. No markdown fences. No import statements.`;
 }

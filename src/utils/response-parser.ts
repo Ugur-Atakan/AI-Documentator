@@ -22,6 +22,17 @@ const MARKERS = {
   responseEnd: "===END_RESPONSE_DTO===",
   swaggerStart: "===SWAGGER_DECORATORS===",
   swaggerEnd: "===END_SWAGGER_DECORATORS===",
+  // New consolidated markers (per-controller pipeline)
+  requestDtosStart: "===REQUEST_DTOS===",
+  requestDtosEnd: "===END_REQUEST_DTOS===",
+  responseDtosStart: "===RESPONSE_DTOS===",
+  responseDtosEnd: "===END_RESPONSE_DTOS===",
+  enumsStart: "===ENUMS===",
+  enumsEnd: "===END_ENUMS===",
+  decoratorsStart: "===DECORATORS===",
+  decoratorsEnd: "===END_DECORATORS===",
+  planStart: "===DOCUMENTATION_PLAN===",
+  planEnd: "===END_DOCUMENTATION_PLAN===",
 } as const;
 
 function extractBlock(text: string, startMarker: string, endMarker: string): string | null {
@@ -146,4 +157,56 @@ export function parseSwaggerResponse(raw: string): {
   }
 
   throw new Error("Could not extract Swagger decorators from response");
+}
+
+/**
+ * Parses consolidated writer output with per-controller sections.
+ * Used by the new multi-agent pipeline.
+ */
+export function parseConsolidatedResponse(raw: string): {
+  requestDtosCode: string | null;
+  responseDtosCode: string | null;
+  enumsCode: string | null;
+  decoratorsCode: string;
+} {
+  const requestDtos = extractBlock(raw, MARKERS.requestDtosStart, MARKERS.requestDtosEnd);
+  const responseDtos = extractBlock(raw, MARKERS.responseDtosStart, MARKERS.responseDtosEnd);
+  const enums = extractBlock(raw, MARKERS.enumsStart, MARKERS.enumsEnd);
+  const decorators = extractBlock(raw, MARKERS.decoratorsStart, MARKERS.decoratorsEnd);
+
+  if (!decorators) {
+    throw new Error("Could not extract DECORATORS section from consolidated response");
+  }
+
+  const isEmpty = (s: string | null): string | null => {
+    if (!s) return null;
+    const trimmed = s.trim();
+    if (trimmed.startsWith("// No ") || trimmed.length === 0) return null;
+    return stripCodeFence(trimmed);
+  };
+
+  return {
+    requestDtosCode: isEmpty(requestDtos),
+    responseDtosCode: responseDtos ? stripCodeFence(responseDtos) : null,
+    enumsCode: isEmpty(enums),
+    decoratorsCode: stripCodeFence(decorators),
+  };
+}
+
+/**
+ * Parses the documentation plan JSON from the planner response.
+ */
+export function parsePlanResponse(raw: string): unknown {
+  const plan = extractBlock(raw, MARKERS.planStart, MARKERS.planEnd);
+  if (plan) {
+    return JSON.parse(stripCodeFence(plan));
+  }
+
+  // Fallback: try to find JSON directly
+  const jsonMatch = raw.match(/\{[\s\S]*"controllerClass"[\s\S]*"endpoints"[\s\S]*\}/);
+  if (jsonMatch) {
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  throw new Error("Could not extract documentation plan from response");
 }

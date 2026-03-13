@@ -36,6 +36,7 @@ export function printConfig(opts: {
   model: string;
   concurrency: number;
   endpointCount: number;
+  pipelineMode?: string;
 }): void {
   const ln = (label: string, value: string) =>
     `  ${DIM("|")} ${DIM(label.padEnd(14))} ${value}`;
@@ -43,6 +44,9 @@ export function printConfig(opts: {
   console.log(DIM("  +" + "-".repeat(50)));
   console.log(ln("Project", opts.project));
   console.log(ln("Output", opts.outputDir ?? DIM("next to controllers")));
+  if (opts.pipelineMode) {
+    console.log(ln("Pipeline", opts.pipelineMode));
+  }
   console.log(ln("Mode", opts.dryRun ? chalk.yellow("dry-run") : "write"));
   console.log(ln("Skip existing", opts.skipExisting ? "yes" : "no"));
   console.log(ln("Modules", opts.modules?.length ? opts.modules.join(", ") : DIM("all")));

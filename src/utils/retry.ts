@@ -2,6 +2,8 @@ export interface RetryOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Called before each retry attempt with attempt number and wait time */
+  onRetry?: (attempt: number, waitMs: number, error: string) => void;
 }
 
 function parseRetryAfterMs(errorMessage: string): number | null {
@@ -43,21 +45,35 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   options: RetryOptions = {}
 ): Promise<T> {
-  const { maxAttempts = 5, baseDelayMs = 2000, maxDelayMs = 60000 } = options;
+  const { maxAttempts = 5, baseDelayMs = 2000, maxDelayMs = 60000, onRetry } = options;
 
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await fn();
+      // Check circuit breaker before attempting
+      if (circuitBreaker.isOpen()) {
+        const cooldownMs = circuitBreaker.getCooldownMs();
+        if (onRetry) {
+          onRetry(attempt, cooldownMs, "Circuit breaker open — cooling down");
+        }
+        await new Promise((r) => setTimeout(r, cooldownMs));
+      }
+
+      const result = await fn();
+      circuitBreaker.recordSuccess();
+      return result;
     } catch (err) {
       lastError = err;
       const msg = err instanceof Error ? err.message : String(err);
 
       if (!isRetryableError(err)) {
         // Non-retryable: fail immediately
+        circuitBreaker.recordFailure();
         throw err;
       }
+
+      circuitBreaker.recordFailure();
 
       if (attempt === maxAttempts) break;
 
@@ -71,9 +87,52 @@ export async function withRetry<T>(
         waitMs = base + Math.random() * 1000;
       }
 
+      if (onRetry) {
+        onRetry(attempt, waitMs, msg.slice(0, 100));
+      }
+
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }
 
   throw lastError;
 }
+
+/**
+ * Circuit breaker: pauses all tasks for a cooldown period
+ * after consecutive failures to prevent hammering a failing API.
+ */
+class CircuitBreaker {
+  private consecutiveFailures = 0;
+  private readonly threshold = 3;
+  private readonly cooldownMs = 30_000;
+  private openUntil = 0;
+
+  isOpen(): boolean {
+    return Date.now() < this.openUntil;
+  }
+
+  getCooldownMs(): number {
+    const remaining = this.openUntil - Date.now();
+    return Math.max(0, remaining);
+  }
+
+  recordSuccess(): void {
+    this.consecutiveFailures = 0;
+  }
+
+  recordFailure(): void {
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= this.threshold) {
+      this.openUntil = Date.now() + this.cooldownMs;
+      this.consecutiveFailures = 0;
+    }
+  }
+
+  reset(): void {
+    this.consecutiveFailures = 0;
+    this.openUntil = 0;
+  }
+}
+
+export const circuitBreaker = new CircuitBreaker();
