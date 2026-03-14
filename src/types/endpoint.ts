@@ -13,6 +13,30 @@ export interface TracedServiceMethod {
   prismaModelsReferenced: string[];
 }
 
+/** Auth/authorization context extracted from decorators */
+export interface AuthContext {
+  isPublic: boolean;
+  requiresBearerAuth: boolean;
+  guards: string[];
+  requiredPermission?: { action: string; subject: string };
+  requiredRoles?: string[];
+  /** e.g. ['id'] from @CurrentUser('id'), ['full'] from @CurrentUser() */
+  currentUserUsages: string[];
+  /** true when @Context() decorator is used — provides workspaceId + mailboxId */
+  requiresContext: boolean;
+}
+
+/** Swagger decorators already present on the class or method */
+export interface ExistingSwagger {
+  hasApiOperation: boolean;
+  hasApiResponse: boolean;
+  /** true if @ApiBearerAuth() is on the class level */
+  hasBearerAuthOnClass: boolean;
+  hasApiTags: boolean;
+  apiTags: string[];
+  hasApiBody: boolean;
+}
+
 export interface ParsedEndpoint {
   id: string;
   controllerClass: string;
@@ -25,6 +49,8 @@ export interface ParsedEndpoint {
   controllerMethodCode: string;
   tracedService: TracedServiceMethod | null;
   traceFailureReason?: string;
+  authContext: AuthContext;
+  existingSwagger: ExistingSwagger;
 }
 
 export interface ParserOutput {
